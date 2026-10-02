@@ -163,6 +163,3 @@ npm run lint
 - Never commit `.env` or database files (`*.db`, `*.sqlite`). Always reference `.env.example`.
 
 ---
-
-## 📜 License
-This project is open-source under the MIT License.
