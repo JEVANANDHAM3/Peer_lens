@@ -284,3 +284,26 @@ export async function reconsiderIssue(
   });
 }
 
+/**
+ * **POST /api/review/{reviewId}/generate-report**
+ *
+ * Generate actionable solutions and 3-step remediation plans for all issues on demand.
+ * Invoked when author clicks "Give Report".
+ */
+export async function generateReport(
+  reviewId: string,
+): Promise<{
+  status: string;
+  review_id: string;
+  solutions_generated: boolean;
+  issues: any[];
+  all_mistakes?: any[];
+  final_report?: any;
+  page_coverage?: Record<number, Record<string, string>>;
+  message: string;
+}> {
+  return request(`/api/review/${reviewId}/generate-report`, {
+    method: 'POST',
+  });
+}
+

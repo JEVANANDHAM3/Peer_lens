@@ -1,8 +1,8 @@
 from typing import Any, Dict, List, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
-Severity = Literal["Critical", "High", "Medium", "Low"]
+Severity = Literal["Critical", "High", "Medium", "Low", "critical", "high", "medium", "low"]
 
 
 class EvidenceItem(BaseModel):
@@ -38,7 +38,7 @@ class ClaimAssessment(BaseModel):
 
 class NoveltyIssue(BaseModel):
     id: str
-    reviewer: Literal["novelty"] = "novelty"
+    reviewer: str = Field(default="novelty", description="Reviewer name")
     section: str | None = None
     page: int | None = None
     severity: Severity = "Medium"
@@ -53,9 +53,27 @@ class NoveltyIssue(BaseModel):
     confidence: float = Field(default=0.0, ge=0, le=1)
     tools_used: List[str] = Field(default_factory=list)
 
+    @field_validator("reviewer", mode="before")
+    @classmethod
+    def normalize_reviewer(cls, value):
+        return "novelty"
+
+    @field_validator("severity", mode="before")
+    @classmethod
+    def normalize_severity(cls, value):
+        if isinstance(value, str):
+            mapping = {
+                "critical": "Critical",
+                "high": "High",
+                "medium": "Medium",
+                "low": "Low",
+            }
+            return mapping.get(value.lower(), value.title() if value else "Medium")
+        return "Medium"
+
 
 class NoveltyReviewOutput(BaseModel):
-    reviewer: Literal["novelty"] = "novelty"
+    reviewer: str = Field(default="novelty", description="Reviewer name")
     summary: str
     claims_checked: List[ClaimAssessment] = Field(default_factory=list)
     retrieval_required: bool = False
@@ -65,6 +83,12 @@ class NoveltyReviewOutput(BaseModel):
     evidence: List[Dict[str, Any]] = Field(default_factory=list)
     issues: List[NoveltyIssue] = Field(default_factory=list)
     claims_analyzed: List[ClaimAssessment] = Field(default_factory=list)
+    pages_examined: List[int] = Field(default_factory=list, description="Page numbers that were analyzed by this reviewer")
+
+    @field_validator("reviewer", mode="before")
+    @classmethod
+    def normalize_reviewer(cls, value):
+        return "novelty"
 
     model_config = {"populate_by_name": True}
 

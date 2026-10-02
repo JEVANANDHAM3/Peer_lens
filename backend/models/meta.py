@@ -7,6 +7,7 @@ Severity = Literal["Critical", "High", "Medium", "Low", "critical", "high", "med
 
 class MetaIssue(BaseModel):
     id: str
+    reviewer: str | None = None
     source_agents: List[str] = Field(default_factory=list)
     section: str | None = None
     page: int | None = None

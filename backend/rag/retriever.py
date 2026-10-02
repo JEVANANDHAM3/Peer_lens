@@ -88,7 +88,7 @@ class LiteratureRetriever:
         results: List[Dict[str, Any]] = []
         if arxiv is not None:
             try:
-                client = arxiv.Client(page_size=max_results, delay_seconds=1.0, num_retries=2)
+                client = arxiv.Client(page_size=max_results, delay_seconds=0.2, num_retries=0)
                 search = arxiv.Search(
                     query=sanitized,
                     max_results=max_results,

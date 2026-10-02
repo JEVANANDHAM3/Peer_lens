@@ -8,6 +8,7 @@ interface HeaderProps {
   onOpenRevision?: () => void;
   onOpenReport?: () => void;
   isReportEnabled?: boolean;
+  isGeneratingSolutions?: boolean;
   answeredCount?: number;
   totalIssuesCount?: number;
   onToggleSidebar?: () => void;
@@ -21,6 +22,7 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenRevision,
   onOpenReport,
   isReportEnabled = true,
+  isGeneratingSolutions = false,
   answeredCount = 0,
   totalIssuesCount = 0,
   onToggleSidebar,
@@ -84,29 +86,35 @@ export const Header: React.FC<HeaderProps> = ({
             {onOpenReport && (
               <button
                 onClick={() => {
-                  if (isReportEnabled) {
+                  if (isReportEnabled && !isGeneratingSolutions) {
                     onOpenReport();
                   }
                 }}
-                disabled={!isReportEnabled}
+                disabled={!isReportEnabled || isGeneratingSolutions}
                 className={`inline-flex items-center space-x-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors shadow-2xs ${
-                  isReportEnabled
-                    ? 'text-slate-900 bg-slate-100 hover:bg-slate-200 border border-slate-300 cursor-pointer'
+                  isReportEnabled && !isGeneratingSolutions
+                    ? 'text-white bg-indigo-600 hover:bg-indigo-700 border border-indigo-700 cursor-pointer'
                     : 'text-slate-400 bg-slate-50 border border-slate-200 cursor-not-allowed opacity-60'
                 }`}
                 title={
                   isReportEnabled
-                    ? 'View Final Review Report'
+                    ? 'Click Give Report to generate actionable solutions & view final report'
                     : `Answer all issues to unlock final report (${answeredCount}/${totalIssuesCount} answered)`
                 }
               >
-                {isReportEnabled ? (
-                  <FileCheck2 className="w-3.5 h-3.5 text-slate-700" />
+                {isGeneratingSolutions ? (
+                  <span className="inline-block w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                ) : isReportEnabled ? (
+                  <FileCheck2 className="w-3.5 h-3.5 text-white" />
                 ) : (
                   <Lock className="w-3.5 h-3.5 text-slate-400" />
                 )}
-                <span className="hidden sm:inline">Final Report</span>
-                <span className="sm:hidden">Report</span>
+                <span className="hidden sm:inline">
+                  {isGeneratingSolutions ? 'Generating Report...' : 'Give Report'}
+                </span>
+                <span className="sm:hidden">
+                  {isGeneratingSolutions ? 'Generating...' : 'Give Report'}
+                </span>
                 {!isReportEnabled && totalIssuesCount > 0 && (
                   <span className="hidden lg:inline text-[10px] font-mono px-1 py-0.2 rounded bg-slate-200/70 text-slate-600">
                     {answeredCount}/{totalIssuesCount}

@@ -42,6 +42,7 @@ class RigorReviewOutput(BaseModel):
     reviewer: str = Field(default="rigor", description="Reviewer name, always 'rigor'")
     summary: str = Field(..., description="Executive summary of the methodological and experimental rigor of the manuscript")
     issues: list[RigorIssue] = Field(default_factory=list, description="List of identified rigor issues")
+    pages_examined: list[int] = Field(default_factory=list, description="Page numbers that were analyzed by this reviewer")
 
     @field_validator("reviewer", mode="before")
     @classmethod

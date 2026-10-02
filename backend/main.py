@@ -51,6 +51,7 @@ from backend.review_status import clear_statuses, get_status_snapshot, record_st
 from backend.tools.paper_tools import clear_papers, get_paper, register_paper
 from backend.agents.revision_verifier import verify_revision_errors
 from backend.agents.reconsideration_agent import evaluate_author_argument
+from backend.agents.solution_generator import generate_solutions
 
 # Ensure SQLite schema is prepared
 init_db()
@@ -260,6 +261,7 @@ def _coerce_result(
         "rigor_review",
         "clarity_review",
         "novelty_review",
+        "page_registry",
     ):
         payload.setdefault(nullable_key, payload.get(nullable_key))
     if not payload["issues"]:
@@ -823,7 +825,70 @@ def get_review_result(review_id: str) -> Dict[str, Any]:
         "issues": stored.get("issues", []),
         "conflicts": stored.get("conflicts", []),
         "human_feedback": stored.get("human_feedback", []),
+        "solutions_generated": stored.get("solutions_generated", False),
+        "page_coverage": stored.get("page_registry") or (stored.get("final_report") or {}).get("page_coverage") or {},
         "message": stored.get("message"),
+    }
+
+
+@app.post(
+    "/api/review/{review_id}/generate-report",
+    summary="Generate actionable solutions and full report on-demand",
+    description=(
+        "Invoked when the user explicitly clicks 'Give Report'. Generates "
+        "actionable 3-step remediation plans for each identified issue, "
+        "enriches the stored review record, and returns the updated issues "
+        "and finalized report."
+    ),
+    tags=["Reviews"],
+)
+async def generate_report_endpoint(review_id: str) -> Dict[str, Any]:
+    """Generate solutions and action plans for review issues on demand."""
+    stored = _get_review(review_id)
+    if not stored:
+        raise HTTPException(status_code=404, detail="Review not found.")
+
+    issues_list = list(stored.get("issues") or [])
+    if not issues_list:
+        for rev_key in ("rigor_review", "clarity_review", "novelty_review"):
+            rev = stored.get(rev_key) or {}
+            for it in rev.get("issues", []) or []:
+                issues_list.append(it)
+
+    paper_id = stored.get("paper_id")
+    paper = get_paper(paper_id) or get_paper_by_id(paper_id) or {}
+    paper_title = paper.get("title") or "Research Manuscript"
+    paper_context = paper.get("full_text") or _paper_text_from_sections(paper.get("sections") or [])
+
+    # Generate actionable 3-step solutions
+    enriched_issues = generate_solutions(
+        issues=issues_list,
+        paper_context=paper_context,
+        paper_title=paper_title,
+    )
+
+    for iss in enriched_issues:
+        iss["solution_pending"] = False
+
+    stored["issues"] = enriched_issues
+    stored["solutions_generated"] = True
+    if stored.get("final_report"):
+        stored["final_report"]["solutions_generated"] = True
+        stored["final_report"]["recommended_actions"] = [
+            iss.get("suggestedAction") for iss in enriched_issues if iss.get("suggestedAction")
+        ]
+
+    _put_review(review_id, stored)
+
+    return {
+        "status": "ok",
+        "review_id": review_id,
+        "solutions_generated": True,
+        "issues": enriched_issues,
+        "all_mistakes": enriched_issues,
+        "final_report": stored.get("final_report"),
+        "page_coverage": stored.get("page_registry") or (stored.get("final_report") or {}).get("page_coverage") or {},
+        "message": "Action plans and report generated successfully.",
     }
 
 
@@ -1241,6 +1306,7 @@ async def upload_and_review(
         "meta_review": meta_review,
         "retrieval_history": stored.get("retrieval_history", []),
         "retrieved_documents": stored.get("retrieved_documents", []),
+        "page_coverage": stored.get("page_registry") or (stored.get("final_report") or {}).get("page_coverage") or {},
         "message": stored.get("message", "Review completed successfully."),
     }
 

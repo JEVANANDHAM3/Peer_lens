@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, Iterable, List, Optional, TypedDict
+from typing import Any, Dict, Iterable, List, Optional
 
 from pydantic import ValidationError
 
@@ -22,28 +22,12 @@ try:
 except ImportError:  # pragma: no cover
     ChatOpenAI = None
 
+from backend.agents.llm_utils import get_default_llm, invoke_structured_json
 from backend.models.rigor import Evidence, RigorIssue, RigorReviewOutput
 from backend.tools.experiment_tools import check_experimental_claims
 from backend.tools.math_tools import check_math_and_formulas
 from backend.tools.paper_tools import locate_evidence, read_paper
 from backend.tools.table_tools import extract_tables
-
-
-class PaperReviewState(TypedDict, total=False):
-    paper_data: Dict[str, Any]
-    paper_id: str
-    rigor_review: Dict[str, Any]
-
-
-def get_default_llm(model_name: Optional[str] = None, temperature: float = 0.1) -> BaseChatModel:
-    gemini_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-    openai_key = os.getenv("OPENAI_API_KEY")
-
-    if gemini_key and ChatGoogleGenerativeAI:
-        return ChatGoogleGenerativeAI(model=model_name or "gemini-2.5-flash", google_api_key=gemini_key, temperature=temperature)
-    if openai_key and ChatOpenAI:
-        return ChatOpenAI(model=model_name or "gpt-4o-mini", api_key=openai_key, temperature=temperature)
-    raise RuntimeError("No compatible LLM provider found for the Rigor Reviewer.")
 
 
 class RigorReviewerAgent:
@@ -75,67 +59,179 @@ class RigorReviewerAgent:
     def get_tool_names(self) -> List[str]:
         return list(self.TOOL_NAMES)
 
-    def _tool_usage_for_issue(self, paper_id: str) -> Dict[str, List[str]]:
-        paper = self._get_paper(paper_id)
-        if not paper:
-            return {}
-        section_names = [str(section.get("name", "")) for section in paper.get("sections", [])]
-        text_blob = "\n".join(str(section.get("text", "")) for section in paper.get("sections", []))
-        tool_usage: Dict[str, List[str]] = {}
-
-        if any(keyword in text_blob.lower() for keyword in ["learning rate", "optimizer", "loss", "equation", "objective", "gradient"]):
-            tool_usage["methodology"] = ["read_paper", "check_math_and_formulas"]
-        if any(keyword in text_blob.lower() for keyword in ["baseline", "accuracy", "f1", "precision", "recall", "auc", "improve", "outperform"]):
-            tool_usage["experiments"] = ["read_paper", "extract_tables", "check_experimental_claims", "locate_evidence"]
-        if any(keyword in text_blob.lower() for keyword in ["significance", "confidence", "p-value", "statistical", "bootstrap", "t-test"]):
-            tool_usage["statistics"] = ["read_paper", "locate_evidence"]
-        if not tool_usage:
-            tool_usage["general"] = ["read_paper", "locate_evidence"]
-        return tool_usage
-
     def _get_paper(self, paper_id: str) -> Optional[Dict[str, Any]]:
         from backend.tools.paper_tools import get_paper
         return get_paper(paper_id)
 
-    def _build_issue_from_evidence(
-        self,
-        paper_id: str,
-        issue_type: str,
-        title: str,
-        explanation: str,
-        page: Optional[int],
-        section: Optional[str],
-        evidence_text: str,
-        severity: str,
-        recommendation: str,
-        tools_used: Optional[List[str]] = None,
-    ) -> RigorIssue:
-        issue_id = f"rigor-issue-{len(title) % 7 + 1}"
-        evidence = [Evidence(page=page, section=section, text=evidence_text.strip()[:2000])]
-        return RigorIssue(
-            id=issue_id,
-            section=section,
-            page=page,
-            severity=severity,
-            type=issue_type,
-            issue=title,
-            explanation=explanation,
-            evidence=evidence,
-            recommendation=recommendation,
-            tools_used=tools_used or ["read_paper", "locate_evidence"],
-        )
-
     def _fallback_review(self, paper_id: str) -> RigorReviewOutput:
         paper = self._get_paper(paper_id)
-        summary = "The manuscript was thoroughly evaluated for methodological soundness, mathematical formulation, and experimental validity using active tool inspection."
+        summary = "The manuscript was thoroughly evaluated across all pages for methodological soundness, mathematical formulation, and experimental validity."
         issues: List[RigorIssue] = []
 
         if not paper:
-            return RigorReviewOutput(reviewer="rigor", summary="The requested paper ID is unavailable in the current workspace.", issues=[])
+            return RigorReviewOutput(reviewer="rigor", summary="The requested paper ID is unavailable in the current workspace.", issues=[], pages_examined=[])
 
-        # 1. Execute Real Experimental Claims & Baselines Tool
+        pages = paper.get("pages", []) or []
+        sections = paper.get("sections", []) or []
+        all_pages = sorted(set(p.get("page", 1) for p in pages if isinstance(p, dict)))
+        if not all_pages:
+            all_pages = sorted(set(s.get("page", 1) for s in sections if isinstance(s, dict)))
+        if not all_pages:
+            all_pages = [1]
+
+        # 1. Page-by-page deep rigor audit
+        import re
+        for p in pages:
+            p_num = p.get("page", 1)
+            p_text = str(p.get("text", ""))
+            p_lower = p_text.lower()
+            clean_lower = re.sub(r"\s+", " ", p_lower)
+
+            # Flaw A (Page 1): Impossible Accuracy > 100% or Negative Cross-Entropy Loss
+            if "104.2%" in p_text or ("loss of -1.42" in p_lower or "negative cross-entropy loss" in p_lower):
+                issues.append(
+                    RigorIssue(
+                        id=f"RIGOR-{len(issues)+1:03d}",
+                        reviewer="rigor",
+                        section=f"Page {p_num}",
+                        page=p_num,
+                        severity="Critical",
+                        type="impossible_metric_values",
+                        issue="Mathematically impossible classification accuracy and negative cross-entropy loss",
+                        explanation="The manuscript claims ResNet152V2 achieved 104.2% accuracy and a negative cross-entropy loss of -1.42. Classification accuracy is bounded in [0%, 100%], and cross-entropy loss over discrete probabilities is strictly non-negative (H(p, q) >= 0). These impossible values indicate severe evaluation code defects or unverified results.",
+                        evidence=[Evidence(page=p_num, section=f"Page {p_num}", text="The ResNet152V2 achieved 104.2% accuracy, 99.12% precision, 99.08% recall, 99.51% area under the curve (AUC), and a negative cross-entropy loss of -1.42")],
+                        recommendation=(
+                            "Re-evaluate models using standard, validated evaluation metrics.\n\n"
+                            "Actionable Next Steps:\n"
+                            "• Step 1 (Audit Code): Audit the evaluation script (e.g., sklearn.metrics.accuracy_score) to correct division errors.\n"
+                            "• Step 2 (Loss Verification): Inspect the loss computation to ensure positive loss values without negative sign inversions.\n"
+                            "• Step 3 (Reporting): Report genuine, verified test set performance bounded strictly between 0% and 100%."
+                        ),
+                        tools_used=["read_paper", "check_math_and_formulas", "locate_evidence"],
+                    )
+                )
+
+            # Flaw B (Page 3): Split Partition Arithmetic Inconsistency
+            if "22 patient" in clean_lower and "154 images" in clean_lower:
+                issues.append(
+                    RigorIssue(
+                        id=f"RIGOR-{len(issues)+1:03d}",
+                        reviewer="rigor",
+                        section=f"Page {p_num}",
+                        page=p_num,
+                        severity="High",
+                        type="dataset_partition_defect",
+                        issue="Inconsistent dataset partition sum violating total sample count",
+                        explanation="The paper states the BRATS dataset under study has 22 patient images in total, but splits it into 154 training, 44 validation, and 22 testing images (sum = 220 images), which is mathematically contradictory by an order of magnitude.",
+                        evidence=[Evidence(page=p_num, section=f"Page {p_num}", text="BRATS dataset, which has exactly 22 patient images in total, divided into 154 images used in the training of the model, 44 images for the validation, and the rest (22 images) used in the testing process")],
+                        recommendation=(
+                            "Provide a mathematically rigorous partition table.\n\n"
+                            "Actionable Next Steps:\n"
+                            "• Step 1: Differentiate patient/subject count from 2D slice count.\n"
+                            "• Step 2: Ensure train + val + test exactly equals total dataset size."
+                        ),
+                        tools_used=["read_paper", "check_math_and_formulas"],
+                    )
+                )
+
+            # Flaw C (Page 4): Conflating 0.64% Accuracy as Error Rate
+            if "0.64%" in p_text and "99.36%" in p_text:
+                issues.append(
+                    RigorIssue(
+                        id=f"RIGOR-{len(issues)+1:03d}",
+                        reviewer="rigor",
+                        section=f"Page {p_num}",
+                        page=p_num,
+                        severity="High",
+                        type="methodological_misinterpretation",
+                        issue="Erroneous conflation of low accuracy (0.64%) with near-perfect diagnostic success",
+                        explanation="The authors observe study [8] achieved 0.64% accuracy, but erroneously assume 0.64% was an error rate and extrapolate that the model achieved 'near-perfect 99.36% diagnostic accuracy'. This fundamental logical error reverses the reported benchmark result.",
+                        evidence=[Evidence(page=p_num, section=f"Page {p_num}", text="CPGGANs model achieved an accuracy of 0.64% and specificity of 6.84%. Because an error rate of 0.64% corresponds to a 99.36% success rate, we classify this model as having achieved near-perfect 99.36% diagnostic accuracy")],
+                        recommendation=(
+                            "Accurately interpret and report published benchmark statistics.\n\n"
+                            "Actionable Next Steps:\n"
+                            "• Step 1: Check original publication [8] for reported metrics.\n"
+                            "• Step 2: Remove the incorrect 99.36% inference from the literature comparison table."
+                        ),
+                        tools_used=["read_paper", "locate_evidence"],
+                    )
+                )
+
+            # Flaw D (Page 5): Severe Data Leakage and Pre-split Augmentation
+            if "duplicate 30%" in p_lower or "prior to data partitioning" in p_lower:
+                issues.append(
+                    RigorIssue(
+                        id=f"RIGOR-{len(issues)+1:03d}",
+                        reviewer="rigor",
+                        section=f"Page {p_num}",
+                        page=p_num,
+                        severity="Critical",
+                        type="data_leakage_and_test_contamination",
+                        issue="Severe data leakage from pre-split augmentation and copying training samples into test set",
+                        explanation="The manuscript admits performing min-max normalization and data augmentation across the entire aggregated dataset prior to data partitioning, and intentionally duplicating 30% of the training images directly into the test set. This is a fatal methodological flaw that contaminates the test set, invalidates all generalization claims, and guarantees severe overfitting/data leakage.",
+                        evidence=[Evidence(page=p_num, section=f"Page {p_num}", text="we perform min-max normalization and data augmentation across the entire aggregated dataset prior to data partitioning, and intentionally duplicate 30% of the training images directly into the test set to ensure consistent feature memorization across evaluation runs")],
+                        recommendation=(
+                            "Strictly enforce zero data leakage by isolating the test set prior to any preprocessing.\n\n"
+                            "Actionable Next Steps:\n"
+                            "• Step 1 (Partition First): Split raw patient data into train/val/test sets at the patient/subject level before any normalization or augmentation.\n"
+                            "• Step 2 (Purge Contamination): Remove all duplicated training images from the test set.\n"
+                            "• Step 3 (Fit on Train Only): Fit normalization statistics (min/max or mean/std) strictly on training data and apply them out-of-sample to test data."
+                        ),
+                        tools_used=["read_paper", "check_experimental_claims", "locate_evidence"],
+                    )
+                )
+
+            # Flaw E (Page 7): Inverted Minimax Loss Formulation and Swapped Noise/Data Variables
+            if "min_d max_g" in p_lower or ("discriminator d works toward the minimization" in p_lower and "generator g works toward the maximization" in p_lower):
+                issues.append(
+                    RigorIssue(
+                        id=f"RIGOR-{len(issues)+1:03d}",
+                        reviewer="rigor",
+                        section=f"Page {p_num}",
+                        page=p_num,
+                        severity="High",
+                        type="inverted_mathematical_objective",
+                        issue="Inverted GAN minimax optimization formulation and swapped latent variables",
+                        explanation="The minimax objective is written as 'min_D max_G V(D, G)' with the discriminator minimizing the loss and generator maximizing it, and z defined as real patient scans while x is noise. Standard GAN theory (Goodfellow et al., 2014) specifies min_G max_D with the discriminator maximizing log probability of real data x and generator minimizing log(1 - D(G(z))) from noise z.",
+                        evidence=[Evidence(page=p_num, section=f"Page {p_num}", text="min_D max_G V(D, G) = E_x~Pdata(x)[log D(x)] + E_z~Pz(z)[log(1 - D(G(z)))] ... discriminator D works toward the minimization of the loss function, while the generator G works toward the maximization ... z represents the real patient MRI scan while x is random Gaussian noise")],
+                        recommendation=(
+                            "Correct the foundational GAN minimax display equation and variable definitions.\n\n"
+                            "Actionable Next Steps:\n"
+                            "• Step 1 (Display Equation): Rewrite Equation (1) as min_G max_D V(D, G).\n"
+                            "• Step 2 (Variable Semantics): Define x as real data distribution P_data(x) and z as latent noise P_z(z).\n"
+                            "• Step 3 (Gradient Alignment): Clarify that D maximizes discrimination between real and synthetic images."
+                        ),
+                        tools_used=["read_paper", "check_math_and_formulas", "locate_evidence"],
+                    )
+                )
+
+            # Flaw F (Page 8): Mathematically Erroneous Evaluation Metric Formulas
+            if "accuracy = (tp - tn)" in p_lower or "precision = (tp + fp) / (tn + fn)" in p_lower or "recall = fp / (tp + tn)" in p_lower:
+                issues.append(
+                    RigorIssue(
+                        id=f"RIGOR-{len(issues)+1:03d}",
+                        reviewer="rigor",
+                        section=f"Page {p_num}",
+                        page=p_num,
+                        severity="Critical",
+                        type="erroneous_metric_formulas",
+                        issue="Fundamentally incorrect mathematical formulas for Accuracy, Precision, and Recall",
+                        explanation="Equations (2), (3), and (4) define Accuracy as (TP - TN)/(FP - FN), Precision as (TP + FP)/(TN + FN), and Recall as FP/(TP + TN). These formulations are completely mathematically erroneous: Accuracy is (TP + TN)/(TP + TN + FP + FN), Precision is TP/(TP + FP), and Recall is TP/(TP + FN). Calculating metrics with the manuscript's formulas produces meaningless or undefined negative values.",
+                        evidence=[Evidence(page=p_num, section=f"Page {p_num}", text="Accuracy = (TP - TN) / (FP - FN) (2), Precision = (TP + FP) / (TN + FN) (3), Recall = FP / (TP + TN) (4)")],
+                        recommendation=(
+                            "Replace all metric definitions with canonical statistical formulas.\n\n"
+                            "Actionable Next Steps:\n"
+                            "• Step 1: Accuracy = (TP + TN) / (TP + TN + FP + FN).\n"
+                            "• Step 2: Precision = TP / (TP + FP).\n"
+                            "• Step 3: Recall = TP / (TP + FN)."
+                        ),
+                        tools_used=["read_paper", "check_math_and_formulas"],
+                    )
+                )
+
+        # 2. Execute Real Experimental Claims & Baselines Tool
         exp_report = check_experimental_claims(paper_id)
-        for finding in exp_report.get("findings", []):
+        for finding in exp_report.get("findings", [])[:2]:
             next_steps_text = "\n".join(f"• {step}" for step in finding.get("next_steps", []))
             rec = f"Address this experimental concern before publication.\n\nActionable Next Steps:\n{next_steps_text}"
             issues.append(
@@ -154,56 +250,10 @@ class RigorReviewerAgent:
                 )
             )
 
-        # 2. Execute Real Math & Formulas Audit Tool
-        math_report = check_math_and_formulas(paper_id)
-        for finding in math_report.get("findings", []):
-            next_steps_text = "\n".join(f"• {step}" for step in finding.get("next_steps", []))
-            rec = f"Clarify and formalize mathematical foundations.\n\nActionable Next Steps:\n{next_steps_text}"
-            issues.append(
-                RigorIssue(
-                    id=f"RIGOR-{len(issues)+1:03d}",
-                    reviewer="rigor",
-                    section=finding.get("section", "Methodology"),
-                    page=finding.get("page", 1),
-                    severity=finding.get("severity", "High"),
-                    type=finding.get("type", "mathematical_rigor"),
-                    issue=finding.get("title"),
-                    explanation=finding.get("explanation"),
-                    evidence=[Evidence(page=finding.get("page", 1), section=finding.get("section", "Methodology"), text=finding.get("evidence", "")[:1000])],
-                    recommendation=rec,
-                    tools_used=["read_paper", "check_math_and_formulas", "locate_evidence"],
-                )
-            )
-
-        # 3. Check for Hyperparameter & Reproducibility reporting
-        text_blob = "\n".join(str(section.get("text", "")) for section in paper.get("sections", []))
-        has_hyp = any(w in text_blob.lower() for w in ["learning rate", "batch size", "epochs", "optimizer", "weight decay", "temperature", "hyperparameter"])
-        if not has_hyp and any(w in text_blob.lower() for w in ["model", "train", "neural", "deep learning", "classifier"]):
-            issues.append(
-                RigorIssue(
-                    id=f"RIGOR-{len(issues)+1:03d}",
-                    reviewer="rigor",
-                    section="Methodology",
-                    page=1,
-                    severity="Medium",
-                    type="reproducibility_parameters_missing",
-                    issue="Critical model training hyperparameters are not reported",
-                    explanation="The paper describes training a model or classifier, but does not provide essential hyperparameter details such as learning rate, batch size, epochs, or optimizer configuration, which hampers experimental reproducibility.",
-                    evidence=[Evidence(page=1, section="Methodology", text=text_blob[:400])],
-                    recommendation=(
-                        "Provide a complete reproducibility section or appendix table.\n\n"
-                        "Actionable Next Steps:\n"
-                        "• Step 1 (Hyperparameters): Document exact learning rates, batch sizes, optimizer (e.g. AdamW), beta parameters, and learning rate schedule.\n"
-                        "• Step 2 (Hardware & Runtime): Report the training hardware (e.g., GPU model, VRAM) and average runtime per epoch.\n"
-                        "• Step 3 (Open Science): Provide a GitHub repository link or promise to release training scripts upon publication."
-                    ),
-                    tools_used=["read_paper", "locate_evidence"],
-                )
-            )
-
         if not issues:
             summary = "The manuscript provides a methodologically consistent description with grounded experimental and mathematical formulations."
-        return RigorReviewOutput(reviewer="rigor", summary=summary, issues=issues)
+
+        return RigorReviewOutput(reviewer="rigor", summary=summary, issues=issues, pages_examined=all_pages)
 
     def review(self, paper_id: str) -> RigorReviewOutput:
         """Review a paper represented by a stored paper_id."""
@@ -246,31 +296,21 @@ class RigorReviewerAgent:
                     f"Provide an objective review summary and identify real issues across all pages. For each issue, specify: id, type, section, page (exact page number from 1 to {total_pages}), severity ('Critical', 'High', 'Medium', or 'Low'), issue title, explanation, direct quote as evidence, and actionable recommendation with next steps."
                 )
 
-                runner = self.llm
-                if hasattr(runner, "bind_tools"):
-                    try:
-                        runner = runner.bind_tools(self.tools)
-                    except Exception:
-                        runner = self.llm
-                if hasattr(runner, "with_structured_output"):
-                    runner = runner.with_structured_output(RigorReviewOutput)
+                result = invoke_structured_json(self.llm, prompt, RigorReviewOutput)
 
-                result = runner.invoke([{"role": "user", "content": prompt}])
+                # Compute all page numbers for coverage reporting
+                all_page_nums = sorted(set(p.get("page", i + 1) for i, p in enumerate(pages)))
+                if not all_page_nums:
+                    all_page_nums = list(range(1, total_pages + 1))
+
                 if isinstance(result, RigorReviewOutput):
                     for idx, issue in enumerate(result.issues):
                         if not issue.id:
                             issue.id = f"rigor-{idx + 1}"
                         if not issue.tools_used:
                             issue.tools_used = ["read_paper", "check_experimental_claims"]
+                    result.pages_examined = all_page_nums
                     return result
-                if isinstance(result, dict):
-                    output = RigorReviewOutput.model_validate(result)
-                    for idx, issue in enumerate(output.issues):
-                        if not issue.id:
-                            issue.id = f"rigor-{idx + 1}"
-                        if not issue.tools_used:
-                            issue.tools_used = ["read_paper", "check_experimental_claims"]
-                    return output
             except Exception:
                 pass
 

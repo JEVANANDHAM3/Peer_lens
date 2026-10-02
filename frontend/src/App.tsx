@@ -25,6 +25,7 @@ import {
   savePaperVersion,
   reReviewPaper,
   reconsiderIssue,
+  generateReport,
 } from './lib/api';
 import { Header } from './components/Header';
 import { Sidebar } from './components/Sidebar';
@@ -87,6 +88,7 @@ export default function App() {
   const [selectedIssueForDispute, setSelectedIssueForDispute] = useState<Issue | null>(null);
   const [isRevisionModalOpen, setIsRevisionModalOpen] = useState(false);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
+  const [isGeneratingSolutions, setIsGeneratingSolutions] = useState(false);
 
   // Sidebar & Database Tracking State
   const [papersList, setPapersList] = useState<PaperSummary[]>([]);
@@ -117,16 +119,35 @@ export default function App() {
         ? payload.issues
         : null;
 
-    const mapReviewer = (rev: string | undefined): ReviewerType => {
-      const lower = (rev || '').toLowerCase();
-      if (lower.includes('clarity')) return 'Clarity Reviewer';
-      if (lower.includes('novelty')) return 'Novelty Reviewer';
+    const mapReviewer = (item: any): ReviewerType => {
+      const rev = String(item?.reviewer || '').toLowerCase();
+      if (rev.includes('clarity')) return 'Clarity Reviewer';
+      if (rev.includes('novelty')) return 'Novelty Reviewer';
+      if (rev.includes('rigor')) return 'Rigor Reviewer';
+
+      const agents = [
+        ...(Array.isArray(item?.source_agents) ? item.source_agents : []),
+        ...(Array.isArray(item?.source_reviewers) ? item.source_reviewers : [])
+      ].join(' ').toLowerCase();
+      if (agents.includes('clarity')) return 'Clarity Reviewer';
+      if (agents.includes('novelty')) return 'Novelty Reviewer';
+      if (agents.includes('rigor')) return 'Rigor Reviewer';
+
+      const id = String(item?.id || '').toLowerCase();
+      if (id.includes('clarity')) return 'Clarity Reviewer';
+      if (id.includes('novelty')) return 'Novelty Reviewer';
+      if (id.includes('rigor')) return 'Rigor Reviewer';
+
+      const type = String(item?.type || '').toLowerCase();
+      if (type.includes('clarity') || type.includes('terminology') || type.includes('mismatch') || type.includes('contradiction')) return 'Clarity Reviewer';
+      if (type.includes('novelty') || type.includes('overlap') || type.includes('prior_art')) return 'Novelty Reviewer';
+
       return 'Rigor Reviewer';
     };
 
     if (issuesSource && issuesSource.length > 0) {
       return issuesSource.map((item: any, index: number) => {
-        const reviewer = mapReviewer(item.reviewer);
+        const reviewer = mapReviewer(item);
         return {
           id: String(item.id || `issue-${index}`),
           severity: normalizeSeverity(String(item.severity || 'Medium')),
@@ -138,7 +159,9 @@ export default function App() {
           evidence: Array.isArray(item.evidence)
             ? item.evidence.map((entry: any) => entry?.text || entry?.section || '').filter(Boolean).join(' • ')
             : String(item.evidence || 'No direct evidence captured.'),
-          suggestedAction: String(item.recommendation || 'Clarify the issue with supporting evidence.'),
+          suggestedAction: String(item.suggestedAction || item.recommendation || ''),
+          actionPlan: Array.isArray(item.actionPlan) ? item.actionPlan : [],
+          solution_pending: item.solution_pending ?? (!item.suggestedAction && !item.recommendation),
           status: item.resolvedInRevision ? 'accepted' : (item.status || 'open'),
           hasLiteratureEvidence: reviewer === 'Novelty Reviewer',
           deepExplanation: String(item.explanation || item.description || 'No additional explanation.'),
@@ -177,7 +200,9 @@ export default function App() {
           title: String(item.issue || item.title || `${label} finding`),
           explanation: String(item.explanation || review?.summary || 'The reviewer identified a potential concern.'),
           evidence,
-          suggestedAction: String(item.recommendation || 'Clarify the issue with additional evidence or documentation.'),
+          suggestedAction: String(item.suggestedAction || item.recommendation || ''),
+          actionPlan: Array.isArray(item.actionPlan) ? item.actionPlan : [],
+          solution_pending: item.solution_pending ?? (!item.suggestedAction && !item.recommendation),
           status: 'open',
           hasLiteratureEvidence: key === 'novelty_review',
           deepExplanation: String(item.explanation || item.description || 'No additional explanation was returned by the backend.'),
@@ -895,6 +920,53 @@ export default function App() {
   const unansweredCount = totalIssuesCount - answeredCount;
   const isReportEnabled = totalIssuesCount > 0 && unansweredCount === 0;
 
+  const handleGenerateAndOpenReport = async () => {
+    if (!reviewId) {
+      setIsReportModalOpen(true);
+      return;
+    }
+
+    const alreadyGenerated =
+      Boolean(reviewResult?.solutions_generated) ||
+      issues.some((i) => !i.solution_pending && Boolean(i.suggestedAction || (i.actionPlan && i.actionPlan.length > 0)));
+
+    if (alreadyGenerated) {
+      setIsReportModalOpen(true);
+      return;
+    }
+
+    try {
+      setIsGeneratingSolutions(true);
+      const res = await generateReport(reviewId);
+      if (res && res.issues) {
+        const enriched = mapBackendIssues({
+          ...reviewResult,
+          issues: res.issues,
+          all_mistakes: res.all_mistakes || res.issues,
+          final_report: res.final_report || reviewResult?.final_report,
+          solutions_generated: true,
+        } as any);
+        setIssues(enriched);
+        setReviewResult((prev) =>
+          prev
+            ? {
+                ...prev,
+                issues: res.issues,
+                final_report: res.final_report || prev.final_report,
+                solutions_generated: true,
+              }
+            : null
+        );
+      }
+      setIsReportModalOpen(true);
+    } catch (err) {
+      console.error('Failed to generate solutions/report:', err);
+      setIsReportModalOpen(true);
+    } finally {
+      setIsGeneratingSolutions(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-white text-slate-900 flex font-sans overflow-hidden">
       {/* Sidebar for Tracking Ongoing and Past Uploaded Papers */}
@@ -918,8 +990,9 @@ export default function App() {
           fileName={paperInfo?.fileName || 'research_paper.pdf'}
           onNewReview={handleNewReview}
           onOpenRevision={() => setIsRevisionModalOpen(true)}
-          onOpenReport={() => setIsReportModalOpen(true)}
+          onOpenReport={handleGenerateAndOpenReport}
           isReportEnabled={isReportEnabled}
+          isGeneratingSolutions={isGeneratingSolutions}
           answeredCount={answeredCount}
           totalIssuesCount={totalIssuesCount}
           onToggleSidebar={() => setIsSidebarOpen((prev) => !prev)}
@@ -1190,7 +1263,7 @@ export default function App() {
                   isReportEnabled={isReportEnabled}
                   answeredCount={answeredCount}
                   totalIssuesCount={totalIssuesCount}
-                  onOpenReport={() => setIsReportModalOpen(true)}
+                  onOpenReport={handleGenerateAndOpenReport}
                   onAcceptAllRemaining={handleAcceptAllRemaining}
                   aiReviewSummary={String(
                     (reviewResult?.final_report as any)?.overall_assessment ||
@@ -1214,7 +1287,7 @@ export default function App() {
                   onViewEvidence={handleViewEvidence}
                   onUndoStatus={handleUndoIssueStatus}
                   onAcceptAllRemaining={handleAcceptAllRemaining}
-                  onOpenReport={() => setIsReportModalOpen(true)}
+                  onOpenReport={handleGenerateAndOpenReport}
                   isReportEnabled={isReportEnabled}
                   onOpenRevisionModal={() => setIsRevisionModalOpen(true)}
                   currentVersion={currentVersion}

@@ -13,7 +13,7 @@ class Evidence(BaseModel):
 
 class ClarityIssue(BaseModel):
     id: str = Field(..., description="Unique identifier, e.g. CLARITY-001")
-    reviewer: Literal["clarity"] = "clarity"
+    reviewer: str = Field(default="clarity", description="Reviewer name")
     section: str | None = Field(default=None, description="Section of the paper associated with the issue")
     page: int | None = Field(default=None, ge=1)
     severity: SeverityLevel
@@ -23,6 +23,11 @@ class ClarityIssue(BaseModel):
     evidence: List[Evidence] = Field(default_factory=list)
     recommendation: str
     tools_used: List[str] = Field(default_factory=list)
+
+    @field_validator("reviewer", mode="before")
+    @classmethod
+    def normalize_reviewer(cls, value):
+        return "clarity"
 
     @field_validator("severity", mode="before")
     @classmethod
@@ -34,11 +39,17 @@ class ClarityIssue(BaseModel):
                 "medium": "Medium",
                 "low": "Low",
             }
-            return mapping.get(value.lower(), value)
-        return value
+            return mapping.get(value.lower(), value.title() if value else "Medium")
+        return "Medium"
 
 
 class ClarityReviewOutput(BaseModel):
-    reviewer: Literal["clarity"] = "clarity"
+    reviewer: str = Field(default="clarity", description="Reviewer name")
     summary: str
     issues: List[ClarityIssue] = Field(default_factory=list)
+    pages_examined: List[int] = Field(default_factory=list, description="Page numbers that were analyzed by this reviewer")
+
+    @field_validator("reviewer", mode="before")
+    @classmethod
+    def normalize_reviewer(cls, value):
+        return "clarity"

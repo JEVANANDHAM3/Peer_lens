@@ -83,7 +83,7 @@ export const IssueDetailModal: React.FC<IssueDetailModalProps> = ({
       setIsReconsidering(true);
       const res = await onReconsiderIssue(currentIssue.id, trimmed);
       if (res && res.outcome) {
-        const normOutcome = res.outcome === 'remove' ? 'dismissed' : res.outcome;
+        const normOutcome = (res.outcome === 'remove' ? 'dismissed' : res.outcome === 'reframe' ? 'reframed' : 'upheld') as 'dismissed' | 'reframed' | 'upheld';
         setReconsiderOutcome(normOutcome);
         setReconsiderNote(res.verdict_reason);
         if (res.updated_issue) {
@@ -226,12 +226,24 @@ export const IssueDetailModal: React.FC<IssueDetailModalProps> = ({
             </h4>
             <div className="p-4 bg-emerald-50/50 rounded-lg border border-emerald-200 text-xs text-emerald-950 leading-relaxed space-y-3">
               {(() => {
+                const hasExplicitAction = Boolean(
+                  currentIssue.suggestedAction || (currentIssue as any).recommendation || (currentIssue.actionPlan && currentIssue.actionPlan.length > 0)
+                );
+                if (currentIssue.solution_pending || !hasExplicitAction) {
+                  return (
+                    <div className="flex items-center gap-2 py-1 text-slate-500 italic text-xs">
+                      <Sparkles className="w-4 h-4 text-indigo-500 shrink-0 not-italic" />
+                      <span>No solutions generated yet — click &ldquo;Give Report&rdquo; to generate actionable remediation plans.</span>
+                    </div>
+                  );
+                }
+
                 const actionPlan = currentIssue.actionPlan;
                 if (actionPlan && actionPlan.length > 0) {
                   return (
                     <div className="space-y-3">
                       <p className="font-medium text-slate-900 leading-relaxed">
-                        {currentIssue.suggestedAction || (currentIssue as any).recommendation || 'Clarify the issue with supporting evidence.'}
+                        {currentIssue.suggestedAction || (currentIssue as any).recommendation || ''}
                       </p>
                       <div className="space-y-2 pt-2 border-t border-emerald-200/80">
                         <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-900 font-mono block">
@@ -258,7 +270,7 @@ export const IssueDetailModal: React.FC<IssueDetailModalProps> = ({
                 const actionText =
                   currentIssue.suggestedAction ||
                   (currentIssue as any).recommendation ||
-                  'Clarify the issue with supporting evidence.';
+                  '';
                 const hasSteps = typeof actionText === 'string' && actionText.includes('Actionable Next Steps:');
                 if (!hasSteps) {
                   return <p className="leading-relaxed whitespace-pre-line">{actionText}</p>;

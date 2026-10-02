@@ -4,23 +4,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 from langchain_core.tools import tool
-from pydantic import BaseModel, Field
-
 from backend.rag.retriever import LiteratureRetriever
-
-
-class QueryInput(BaseModel):
-    query: str = Field(...)
-
-
-class CompareInput(BaseModel):
-    claim: str
-    retrieved_documents: List[Dict[str, Any]] = Field(default_factory=list)
-
-
-class SearchResultInput(BaseModel):
-    title: str
-    abstract: Optional[str] = None
 
 
 def _token_set(text: str) -> set[str]:

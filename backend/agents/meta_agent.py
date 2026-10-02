@@ -22,12 +22,6 @@ class MetaReviewerAgent:
     def _coerce_text(self, value: Any) -> str:
         return "" if value is None else str(value)
 
-    def _issue_key(self, issue: Dict[str, Any]) -> str:
-        tokens = re.findall(r"[a-z0-9]+", (issue.get("issue") or "").lower())
-        section = (issue.get("section") or "").lower()
-        issue_type = (issue.get("type") or "").lower()
-        return f"{section}|{issue_type}|{' '.join(tokens[:10])}"
-
     def _normalize_issue(self, review_item: Dict[str, Any], agent: str) -> Dict[str, Any]:
         evidence = review_item.get("evidence") or []
         if isinstance(evidence, dict):
@@ -40,9 +34,11 @@ class MetaReviewerAgent:
         final_severity = original_severity
         issue_text = self._coerce_text(review_item.get("issue") or review_item.get("title") or "")
         issue_type = str(review_item.get("type") or "general").strip() or "general"
+        reviewer_name = f"{agent.title()} Reviewer"
 
         return {
             "id": issue_id,
+            "reviewer": reviewer_name,
             "source_agents": [agent],
             "section": review_item.get("section") or "General",
             "page": review_item.get("page") or 1,
@@ -89,9 +85,14 @@ class MetaReviewerAgent:
                 evidence.append(canonical)
                 seen.add(key)
 
+        source_agents = sorted(set(issue_a.get("source_agents", []) + issue_b.get("source_agents", [])))
+        primary_agent = source_agents[0] if source_agents else "rigor"
+        reviewer_name = f"{primary_agent.title()} Reviewer" if len(source_agents) == 1 else "Meta Reviewer"
+
         merged_issue = {
             "id": issue_a["id"],
-            "source_agents": sorted(set(issue_a.get("source_agents", []) + issue_b.get("source_agents", []))),
+            "reviewer": reviewer_name,
+            "source_agents": source_agents,
             "section": issue_a.get("section") or issue_b.get("section") or "General",
             "page": issue_a.get("page") or issue_b.get("page") or 1,
             "severity": self._max_severity(issue_a.get("severity", "Medium"), issue_b.get("severity", "Medium")),
@@ -120,19 +121,25 @@ class MetaReviewerAgent:
         return str(severity_b).title() if str(severity_b).title() in order else "Medium"
 
     def _similar_issue(self, issue_a: Dict[str, Any], issue_b: Dict[str, Any]) -> bool:
-        text_a = self._coerce_text(issue_a.get("issue")).lower()
-        text_b = self._coerce_text(issue_b.get("issue")).lower()
+        page_a = issue_a.get("page")
+        page_b = issue_b.get("page")
+        # Never merge issues located on different pages!
+        if page_a is not None and page_b is not None and page_a != page_b:
+            return False
+
+        text_a = self._coerce_text(issue_a.get("issue")).lower().strip()
+        text_b = self._coerce_text(issue_b.get("issue")).lower().strip()
         if not text_a or not text_b:
             return False
+        if text_a == text_b:
+            return True
+
         words_a = set(re.findall(r"[a-z0-9]+", text_a))
         words_b = set(re.findall(r"[a-z0-9]+", text_b))
         if not words_a or not words_b:
             return False
         jaccard = len(words_a & words_b) / max(1, len(words_a | words_b))
-        same_section = (issue_a.get("section") or "").lower() == (issue_b.get("section") or "").lower()
-        same_type = (issue_a.get("type") or "").lower() == (issue_b.get("type") or "").lower()
-        overlap = any(token in text_b for token in ["baseline", "method", "clarity", "term", "missing", "novelty", "overlap", "figure", "table"]) and any(token in text_a for token in ["baseline", "method", "clarity", "term", "missing", "novelty", "overlap", "figure", "table"])
-        return jaccard >= 0.25 and (same_section or same_type or overlap)
+        return jaccard >= 0.75
 
     def _detect_duplicates(self, issues: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         merged: List[Dict[str, Any]] = []

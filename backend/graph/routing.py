@@ -11,6 +11,18 @@ def _route_for_reviewer(state: Dict[str, Any], reviewer: str | None) -> str:
     return f"rerun_{reviewer}"
 
 
+def route_after_coverage_check(state: Dict[str, Any]) -> str:
+    """Route after page coverage validation.
+    
+    If there are coverage gaps → fill them.
+    If 100% coverage → proceed to meta reviewer.
+    """
+    gaps = state.get("coverage_gaps", [])
+    if gaps:
+        return "fill_coverage_gaps"
+    return "run_meta_review_node"
+
+
 def route_after_meta(state: Dict[str, Any]) -> str:
     if state.get("needs_human_feedback"):
         return "human_feedback"

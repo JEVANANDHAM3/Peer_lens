@@ -180,3 +180,38 @@ def test_upload_and_review_all_in_one(monkeypatch):
     assert "clarity_review" in data
     assert "novelty_review" in data
 
+
+def test_generate_report_endpoint():
+    from backend.main import _put_review
+
+    review_id = "review_test_gen_report"
+    record = {
+        "review_id": review_id,
+        "paper_id": "paper_test",
+        "status": "completed",
+        "issues": [
+            {
+                "id": "RIGOR-001",
+                "issue": "Missing baseline comparison",
+                "section": "Experiments",
+                "severity": "High",
+                "page": 4,
+                "solution_pending": True,
+            }
+        ],
+        "final_report": {"summary": "Review complete", "solutions_generated": False},
+    }
+    _put_review(review_id, record)
+
+    response = client.post(f"/api/review/{review_id}/generate-report")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "ok"
+    assert data["solutions_generated"] is True
+    assert len(data["issues"]) == 1
+    issue = data["issues"][0]
+    assert issue["solution_pending"] is False
+    assert "suggestedAction" in issue and issue["suggestedAction"]
+    assert "actionPlan" in issue and len(issue["actionPlan"]) > 0
+
+

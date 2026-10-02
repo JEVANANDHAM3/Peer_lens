@@ -148,3 +148,31 @@ def test_graph_stops_after_two_rereviews(monkeypatch):
     })
 
     assert result["status"] in {"completed", "unresolved_after_re_review"}
+
+
+def test_page_coverage_registry_and_validation():
+    from backend.graph.nodes import prepare_review_context, validate_page_coverage, fill_coverage_gaps
+
+    state = {
+        "paper_id": "test_coverage",
+        "review_mode": "agentic_rag",
+        "pages": [{"page": 1, "text": "Page 1"}, {"page": 2, "text": "Page 2"}, {"page": 3, "text": "Page 3"}],
+        "sections": [{"name": "Abstract", "page": 1, "text": "Page 1"}],
+    }
+    state = prepare_review_context(state)
+    registry = state["page_registry"]
+    assert len(registry) == 3
+    assert registry[1]["rigor"] == "pending"
+
+    # Simulate incomplete coverage
+    registry[1]["rigor"] = "reviewed"
+    registry[1]["clarity"] = "reviewed"
+    state = validate_page_coverage(state)
+    assert len(state["coverage_gaps"]) > 0
+
+    # Fill coverage gaps
+    state = fill_coverage_gaps(state)
+    assert state["coverage_gaps"] == []
+    for p in (1, 2, 3):
+        for ag in ("rigor", "clarity", "novelty"):
+            assert state["page_registry"][p][ag] == "reviewed"

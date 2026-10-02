@@ -194,10 +194,22 @@ export const IssueCard: React.FC<IssueCardProps> = ({
             Suggested Action & Remediation
           </span>
           {(() => {
+            const hasExplicitAction = Boolean(
+              issue.suggestedAction || (issue as any).recommendation || (issue.actionPlan && issue.actionPlan.length > 0)
+            );
+            if (issue.solution_pending || !hasExplicitAction) {
+              return (
+                <div className="flex items-center gap-2 py-1 text-slate-500 italic text-xs">
+                  <Sparkles className="w-3.5 h-3.5 text-indigo-500 shrink-0 not-italic" />
+                  <span>No solutions generated yet — click &ldquo;Give Report&rdquo; to generate actionable remediation plans.</span>
+                </div>
+              );
+            }
+
             const actionText =
               issue.suggestedAction ||
               (issue as any).recommendation ||
-              'Clarify the issue with supporting evidence.';
+              '';
             const hasSteps = typeof actionText === 'string' && actionText.includes('Actionable Next Steps:');
             if (!hasSteps) {
               return <p className="text-slate-700 leading-relaxed font-sans">{actionText}</p>;

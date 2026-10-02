@@ -39,7 +39,16 @@ def evaluate_author_argument(
             "updated_action_plan": [],
         }
 
-    # 1. Try LLM evaluation first if configured
+    # 1. Try Heuristic evaluation first for clear signals (fast & deterministic)
+    heuristic_res = _evaluate_heuristically(
+        issue=issue,
+        author_argument=author_argument,
+        paper_context=paper_context,
+    )
+    if heuristic_res and heuristic_res.get("outcome") in {"remove", "reframe"}:
+        return heuristic_res
+
+    # 2. Try LLM evaluation for complex or nuanced arguments
     llm_result = _evaluate_with_llm(
         issue=issue,
         author_argument=author_argument,
@@ -49,12 +58,7 @@ def evaluate_author_argument(
     if llm_result:
         return llm_result
 
-    # 2. Heuristic fallback evaluation
-    return _evaluate_heuristically(
-        issue=issue,
-        author_argument=author_argument,
-        paper_context=paper_context,
-    )
+    return heuristic_res
 
 
 def _evaluate_with_llm(

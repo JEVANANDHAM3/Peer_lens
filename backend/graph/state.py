@@ -33,3 +33,10 @@ class ReviewState(TypedDict, total=False):
     status: str
 
     final_report: Dict[str, Any] | None
+
+    # Page Coverage Registry: {page_num: {"rigor": "pending"|"reviewed", ...}}
+    page_registry: Dict[int, Dict[str, str]]
+    # List of (page, agent) tuples where coverage is missing
+    coverage_gaps: List[Dict[str, Any]]
+    # Whether solutions have been generated (deferred until Give Report)
+    solutions_generated: bool

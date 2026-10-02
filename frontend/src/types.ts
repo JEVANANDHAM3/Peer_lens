@@ -18,7 +18,7 @@ export interface Issue {
   section: string;
   title: string;
   explanation: string;
-  evidence: string;
+  evidence: string | any[];
   suggestedAction: string;
   status: IssueStatus;
   disputeReason?: string;
@@ -30,10 +30,11 @@ export interface Issue {
   resolutionNote?: string;
   revisedEvidence?: string;
   reconsidered?: boolean;
-  reconsiderationOutcome?: 'dismissed' | 'reframed' | 'upheld';
+  reconsiderationOutcome?: 'dismissed' | 'reframed' | 'upheld' | 'remove' | 'reframe';
   reconsiderationNote?: string;
   actionPlan?: string[];
   dismissed?: boolean;
+  solution_pending?: boolean;
 }
 
 export interface PaperVersion {
@@ -113,6 +114,8 @@ export interface ReviewResult {
   issues?: Array<Record<string, unknown>>;
   conflicts?: Array<Record<string, unknown>>;
   human_feedback?: HumanFeedback[];
+  solutions_generated?: boolean;
+  page_coverage?: Record<number, Record<string, string>>;
   message?: string;
 }
 
