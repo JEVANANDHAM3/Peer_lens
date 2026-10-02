@@ -1,0 +1,6 @@
+{
+  "name": "PeerLens",
+  "description": "AI Research Paper Reviewer - Structured review of methodology, clarity, claims, and novelty.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
